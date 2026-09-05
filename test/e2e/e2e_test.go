@@ -34,7 +34,7 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "environment-controller-system"
+const namespace = "kuberik-system"
 
 // serviceAccountName created for the project
 const serviceAccountName = "environment-controller-controller-manager"
