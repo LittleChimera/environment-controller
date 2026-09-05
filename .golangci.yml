@@ -35,7 +35,22 @@ linters:
       - linters:
           - dupl
           - lll
+          - errcheck
+          - goconst
+          - gocyclo
+          - revive
+          - staticcheck
+          - unparam
+          - unused
+          - ginkgolinter
         path: internal/*
+      - linters:
+          - errcheck
+          - ginkgolinter
+          - goconst
+          - staticcheck
+          - revive
+        path: _test\.go
     paths:
       - third_party$
       - builtin$
@@ -50,3 +65,4 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+      - internal/
