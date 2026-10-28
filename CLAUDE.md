@@ -29,7 +29,7 @@ A Kubernetes controller for managing environments and their relationships across
 
 - **Multi-Backend Support**: Generic Environment API that can support multiple backends (currently GitHub)
 - **GitHub Deployment Integration**: Creates and manages GitHub deployments for Environment resources
-- **Relationship Management**: Manages environment relationships (After, Parallel)
+- **Relationship Management**: Manages environment relationships (After, Alongside)
 - **Status Reporting**: Reports deployment status back to GitHub Deployments API
 - **Automatic RolloutGate Creation**: Automatically creates and manages RolloutGate resources
 
@@ -136,8 +136,8 @@ data:
 ## Environment Relationships
 
 **Relationship Types:**
-- `After`: Sequential deployment (must wait for other environment)
-- `Parallel`: Concurrent deployment (can deploy simultaneously)
+- `After`: Sequential deployment (a version passes once the other environment's deployment of it succeeded)
+- `Alongside`: Follow the other environment (a version passes as soon as the other environment starts deploying it, unless that deployment failed or was cancelled)
 
 When relationships are specified, the controller automatically creates RolloutGate resources to enforce the deployment order.
 
@@ -164,7 +164,7 @@ type BackendConfig struct {
 
 type EnvironmentRelationship struct {
     Environment string           `json:"environment"`
-    Type        RelationshipType `json:"type"` // "After" or "Parallel"
+    Type        RelationshipType `json:"type"` // "After" or "Alongside"
 }
 ```
 

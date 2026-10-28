@@ -354,10 +354,12 @@ func (r *GitHubEnvironmentReconciler) buildEnvironmentInfos(environment *kuberik
 		environment.Status.EnvironmentInfos = []kuberikv1alpha1.EnvironmentInfo{}
 	}
 
-	// Make a deep copy of the environment infos
+	// Make a deep copy of the environment infos. Relationships are normalized because status
+	// written by an older controller may still hold a type the CRD no longer accepts.
 	environmentInfoList := make([]kuberikv1alpha1.EnvironmentInfo, len(environment.Status.EnvironmentInfos))
 	for i := range environment.Status.EnvironmentInfos {
 		environmentInfoList[i] = *environment.Status.EnvironmentInfos[i].DeepCopy()
+		environmentInfoList[i].Relationship = normalizeRelationship(environmentInfoList[i].Relationship)
 	}
 
 	// Update or add environment infos with history from graphData
@@ -739,8 +741,30 @@ func (r *GitHubEnvironmentReconciler) extractDeploymentPayload(dep *github.Deplo
 	if payload.ID == "" || payload.Version == nil {
 		return nil
 	}
+	// Payloads can be written by other clusters' controllers, possibly older ones that still use
+	// relationship types this version doesn't know (e.g. the removed "Parallel").
+	payload.Relationship = normalizeRelationship(payload.Relationship)
 
 	return &payload
+}
+
+// normalizeRelationship returns a copy of rel whose type is one this controller knows.
+// Relationships are read from places the CRD's enum doesn't guard: GitHub deployment payloads
+// written by other (possibly older) controllers, Environments stored before a CRD upgrade, and
+// status written by an older controller. Any other type, such as the removed "Parallel", is
+// treated as "After". That matches how older controllers gated such environments, and it keeps
+// the value valid for this controller's status, which the CRD's enum would otherwise reject.
+func normalizeRelationship(rel *kuberikv1alpha1.EnvironmentRelationship) *kuberikv1alpha1.EnvironmentRelationship {
+	if rel == nil {
+		return nil
+	}
+	normalized := rel.DeepCopy()
+	switch normalized.Type {
+	case kuberikv1alpha1.RelationshipTypeAfter, kuberikv1alpha1.RelationshipTypeAlongside:
+	default:
+		normalized.Type = kuberikv1alpha1.RelationshipTypeAfter
+	}
+	return normalized
 }
 
 // extractDeploymentKey extracts the deployment key from a GitHub deployment's payload and environment
@@ -848,7 +872,7 @@ func (r *GitHubEnvironmentReconciler) syncDeploymentHistory(ctx context.Context,
 			// Status and other mutable fields come from GitHub deployment statuses
 			payload := deploymentPayload{
 				ID:           historyID,
-				Relationship: environment.Spec.Relationship,
+				Relationship: normalizeRelationship(environment.Spec.Relationship),
 				Version:      h.Version.DeepCopy(),
 			}
 			payloadJSON, err := json.Marshal(payload)
@@ -1157,14 +1181,14 @@ func (r *GitHubEnvironmentReconciler) applyRolloutGateDesiredState(rolloutGate *
 	prettyName := "Relationship not ready yet"
 	var description string
 	if deployment.Spec.Relationship != nil {
-		relType := "deployed"
+		relatedEnv := deployment.Spec.Relationship.Environment
 		switch deployment.Spec.Relationship.Type {
-		case kuberikv1alpha1.RelationshipTypeAfter:
-			relType = "deployed after"
-		case kuberikv1alpha1.RelationshipTypeParallel:
-			relType = "deployed in parallel with"
+		case kuberikv1alpha1.RelationshipTypeAlongside:
+			description = fmt.Sprintf("This gate passes versions as soon as the %s environment starts deploying them, unless the deployment there has failed or been cancelled.", relatedEnv)
+		default:
+			// After, and any type this controller doesn't know (see normalizeRelationship)
+			description = fmt.Sprintf("This gate is passing only for those versions that have been successfully deployed after the %s environment.", relatedEnv)
 		}
-		description = fmt.Sprintf("This gate is passing only for those versions that have been successfully %s the %s environment.", relType, deployment.Spec.Relationship.Environment)
 	} else {
 		description = "This gate is passing only for those versions that have been successfully deployed to the related environment."
 	}
@@ -1401,7 +1425,7 @@ func (r *GitHubEnvironmentReconciler) buildRelationshipGraph(ctx context.Context
 
 			// Extract relationship from Environment spec
 			if env.Spec.Relationship != nil {
-				envRelationships[envName] = env.Spec.Relationship
+				envRelationships[envName] = normalizeRelationship(env.Spec.Relationship)
 			}
 		}
 	}
@@ -1476,12 +1500,12 @@ func (r *GitHubEnvironmentReconciler) buildRelationshipGraph(ctx context.Context
 		if !exists && relevantEnvironments[envName] {
 			envInfo := environmentInfo{}
 			if env.Spec.Relationship != nil {
-				envInfo.Relationship = env.Spec.Relationship
+				envInfo.Relationship = normalizeRelationship(env.Spec.Relationship)
 			}
 			environmentInfos[envName] = envInfo
 		} else if exists && existingInfo.Relationship == nil && env.Spec.Relationship != nil {
 			// Update relationship from Environment spec if not set from GitHub
-			existingInfo.Relationship = env.Spec.Relationship
+			existingInfo.Relationship = normalizeRelationship(env.Spec.Relationship)
 			environmentInfos[envName] = existingInfo
 		}
 	}
@@ -1637,9 +1661,17 @@ func (r *GitHubEnvironmentReconciler) buildRelationshipGraph(ctx context.Context
 	}, nil
 }
 
-// updateAllowedVersionsFromRelationships checks environment relationships and updates allowed versions on RolloutGate
-// Version relevance is determined by relationships: we track versions that are relevant to the current environment
-// based on "After" and "Parallel" relationships
+// updateAllowedVersionsFromRelationships checks environment relationships and updates allowed versions on RolloutGate.
+// The related environment's history (synced from GitHub deployments) decides which versions pass,
+// depending on the relationship type (see relationshipAllowsBakeStatus).
+//
+// The gate is an allow list that the Rollout consults only when it picks its next version, which
+// has some consequences for "Alongside":
+//   - If the related environment's deployment of a version fails or is cancelled after this
+//     environment has started deploying it, the version drops out of the allow list, but this
+//     environment's deployment keeps going and is judged by its own bake and health checks.
+//   - Rollbacks on the related environment don't propagate. The Rollout only moves to release
+//     candidates newer than what it runs, so an older version being allowed changes nothing.
 func (r *GitHubEnvironmentReconciler) updateAllowedVersionsFromRelationships(ctx context.Context, environment *kuberikv1alpha1.Environment) error {
 	// Get the referenced Rollout to access releaseCandidates
 	rollout, err := r.getReferencedRollout(ctx, environment)
@@ -1684,12 +1716,9 @@ func (r *GitHubEnvironmentReconciler) updateAllowedVersionsFromRelationships(ctx
 				}
 				revision := *entry.Version.Revision
 
-				// Check if bake status is succeeded
 				// Since we now have consolidated history in Status with latest bake status (from GitHub),
 				// checking the entry's BakeStatus is sufficient.
-				bakeSucceeded := entry.BakeStatus != nil && *entry.BakeStatus == kuberikrolloutv1alpha1.BakeStatusSucceeded
-
-				if bakeSucceeded {
+				if relationshipAllowsBakeStatus(environment.Spec.Relationship.Type, entry.BakeStatus) {
 					// Match revision to tag in releaseCandidates
 					if tag, found := revisionToTag[revision]; found {
 						// Only add if not already seen
@@ -1742,6 +1771,28 @@ func (r *GitHubEnvironmentReconciler) updateAllowedVersionsFromRelationships(ctx
 	}
 
 	return nil
+}
+
+// relationshipAllowsBakeStatus reports whether a version whose deployment on the related environment
+// has the given bake status may pass this environment's gate.
+func relationshipAllowsBakeStatus(relType kuberikv1alpha1.RelationshipType, bakeStatus *string) bool {
+	if bakeStatus == nil {
+		return false
+	}
+	switch relType {
+	case kuberikv1alpha1.RelationshipTypeAlongside:
+		// The related environment has started deploying the version and it hasn't failed there
+		switch *bakeStatus {
+		case kuberikrolloutv1alpha1.BakeStatusDeploying,
+			kuberikrolloutv1alpha1.BakeStatusInProgress,
+			kuberikrolloutv1alpha1.BakeStatusSucceeded:
+			return true
+		}
+		return false
+	default:
+		// After, and any type this controller doesn't know (see normalizeRelationship)
+		return *bakeStatus == kuberikrolloutv1alpha1.BakeStatusSucceeded
+	}
 }
 
 // updateEnvironmentInfoWithHistory updates or adds an EnvironmentInfo entry to the list

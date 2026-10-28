@@ -77,10 +77,14 @@ spec:
                       relates to
                     type: string
                   type:
-                    description: 'Type is the type of relationship: "After" or "Parallel"'
+                    description: |-
+                      Type is the type of relationship:
+                      - "After": deploy a version only once it has been successfully deployed to the related environment.
+                      - "Alongside": deploy the same version as the related environment as soon as that environment
+                        starts deploying it, unless its deployment there failed or was cancelled.
                     enum:
                     - After
-                    - Parallel
+                    - Alongside
                     type: string
                 required:
                 - environment
@@ -342,11 +346,14 @@ spec:
                             relates to
                           type: string
                         type:
-                          description: 'Type is the type of relationship: "After"
-                            or "Parallel"'
+                          description: |-
+                            Type is the type of relationship:
+                            - "After": deploy a version only once it has been successfully deployed to the related environment.
+                            - "Alongside": deploy the same version as the related environment as soon as that environment
+                              starts deploying it, unless its deployment there failed or was cancelled.
                           enum:
                           - After
-                          - Parallel
+                          - Alongside
                           type: string
                       required:
                       - environment
