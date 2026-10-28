@@ -6,7 +6,7 @@ A Kubernetes controller for managing environments and their relationships across
 
 - **Multi-Backend Support**: Generic Environment API that can support multiple backends (currently GitHub)
 - **GitHub Deployment Integration**: Creates and manages GitHub deployments for Environment resources
-- **Relationship Management**: Manages environment relationships between environments (After, Parallel)
+- **Relationship Management**: Manages environment relationships between environments (After, Alongside)
 - **Status Reporting**: Reports deployment status back to GitHub Deployments API
 - **Automatic RolloutGate Creation**: Automatically creates and manages RolloutGate resources
 
@@ -75,7 +75,7 @@ spec:
 - `environment`: Environment name (e.g., "production", "staging")
 - `ref`: Git reference (branch, tag, or SHA) - defaults to the revision from Rollout history
 - `relationship`: Defines relationship to other environments
-  - `type`: "After" or "Parallel"
+  - `type`: "After" or "Alongside" (see [Environment Relationships](#environment-relationships))
   - `environment`: Environment name this deployment relates to
 - `requeueInterval`: Interval for reconciliation (default: "1m")
 
@@ -117,6 +117,46 @@ data:
 7. **RolloutGate Management**: The controller automatically creates and manages RolloutGate resources for the Environment.
 
 8. **Relationship Resolution**: If relationships are specified, the controller checks deployment statuses across environments to determine allowed versions.
+
+## Environment Relationships
+
+An Environment with a `relationship` gets a RolloutGate whose `allowedVersions` list comes from the related environment's deployment history, as reported through GitHub deployment statuses. The relationship type decides which of those versions pass:
+
+| Type | A version passes the gate once the related environment's deployment of it is | Use it for |
+|------|------------------------------------------------------------------------------|------------|
+| `After` | `Succeeded` | Promotion: deploy only what has been deployed and baked successfully before, e.g. `production` after `staging`. |
+| `Alongside` | `Deploying`, `InProgress` or `Succeeded` (not `Failed` or `Cancelled`) | Following: deploy the same version as another environment at the same time, e.g. a second production region that should inherit `production`'s manual approvals instead of needing its own. |
+
+```yaml
+# prod-eu-1 deploys whatever prod deploys, as soon as prod starts deploying it
+spec:
+  environment: "prod-eu-1"
+  relationship:
+    type: "Alongside"
+    environment: "prod"
+```
+
+The gate is an allow list that the Rollout only consults when it picks its next version. For `Alongside` this means:
+
+- **Failures on the related environment**: when the related environment's deployment of a version fails or is cancelled, the version drops out of the allow list. If this environment has already started deploying it, that deployment keeps going and is judged by this environment's own bake and health checks.
+- **Rollbacks don't propagate**: a Rollout only moves to release candidates newer than the version it runs, so when the related environment rolls back, this environment stays where it is.
+
+### Mixed controller versions
+
+Every controller that reports the same deployment `name` to the same GitHub repository reads the other environments' relationships from the GitHub deployment payloads and copies them into its own Environment's status:
+
+- A relationship type the controller doesn't know, for example `Parallel` written by an older controller, is treated as `After`. It is never written to status as-is.
+- Older controllers (v0.1.x) don't know `Alongside`, and their CRD rejects it in status. Upgrade the controller and CRD in every cluster that reports to the repository before you set any Environment to `Alongside`. Until then, those older controllers fail to update their status and RolloutGates.
+
+### Upgrading from `Parallel`
+
+`Parallel` has been removed. It never gated differently from `After`: both only passed versions whose deployment on the related environment succeeded. With the new CRD, an Environment that still has `type: Parallel` fails validation on its next update. Until it is updated, the controller treats a stored `Parallel` as `After`.
+
+To upgrade without disruption:
+
+1. Change every `type: Parallel` to `type: After`. Both the old and the new CRD accept it, and it gates exactly as before.
+2. Upgrade the controller and CRD in every cluster that reports to the same GitHub repository.
+3. Set `type: Alongside` on the environments that should follow another one.
 
 ## Installation
 
@@ -195,7 +235,7 @@ type BackendConfig struct {
 ```go
 type EnvironmentRelationship struct {
     Environment string           `json:"environment"`
-    Type        RelationshipType `json:"type"` // "After" or "Parallel"
+    Type        RelationshipType `json:"type"` // "After" or "Alongside"
 }
 ```
 
