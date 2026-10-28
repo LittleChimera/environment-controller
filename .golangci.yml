@@ -35,21 +35,10 @@ linters:
       - linters:
           - dupl
           - lll
-          - errcheck
-          - goconst
-          - gocyclo
-          - revive
-          - staticcheck
-          - unparam
-          - unused
-          - ginkgolinter
         path: internal/*
+      # Test fixtures repeat names and versions on purpose; constants for them hurt readability.
       - linters:
-          - errcheck
-          - ginkgolinter
           - goconst
-          - staticcheck
-          - revive
         path: _test\.go
     paths:
       - third_party$
@@ -65,4 +54,3 @@ formatters:
       - third_party$
       - builtin$
       - examples$
-      - internal/
