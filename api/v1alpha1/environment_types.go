@@ -30,10 +30,15 @@ import (
 type RelationshipType string
 
 const (
-	// RelationshipTypeAfter means this environment deploys after the related environment
+	// RelationshipTypeAfter means this environment deploys a version only after the related
+	// environment has deployed it successfully (its bake succeeded).
 	RelationshipTypeAfter RelationshipType = "After"
-	// RelationshipTypeParallel means this environment deploys in parallel with the related environment
-	RelationshipTypeParallel RelationshipType = "Parallel"
+	// RelationshipTypeAlongside means this environment follows the related environment and
+	// deploys the same version alongside it: a version may deploy here as soon as the related
+	// environment has started deploying it, as long as that deployment has not failed or been
+	// cancelled. Use it for an environment that should track another environment's version
+	// (including its manual approvals) without a gate of its own.
+	RelationshipTypeAlongside RelationshipType = "Alongside"
 )
 
 // EnvironmentRelationship defines a relationship to another environment
@@ -42,9 +47,12 @@ type EnvironmentRelationship struct {
 	// +required
 	Environment string `json:"environment"`
 
-	// Type is the type of relationship: "After" or "Parallel"
+	// Type is the type of relationship:
+	// - "After": deploy a version only once it has been successfully deployed to the related environment.
+	// - "Alongside": deploy the same version as the related environment as soon as that environment
+	//   starts deploying it, unless its deployment there failed or was cancelled.
 	// +required
-	// +kubebuilder:validation:Enum=After;Parallel
+	// +kubebuilder:validation:Enum=After;Alongside
 	Type RelationshipType `json:"type"`
 }
 
