@@ -638,37 +638,37 @@ func (r *GitHubEnvironmentReconciler) getRolloutDashboardURL(ctx context.Context
 							continue
 						}
 
-					// Find the listener to determine protocol
-					// If parentRef specifies a SectionName, use that specific listener
-					// Otherwise, match listener by hostname
-					var targetListener *gatewayv1.Listener
-					if parentRef.SectionName != nil {
-						// Match by listener name
-						listenerName := string(*parentRef.SectionName)
-						for i := range gateway.Spec.Listeners {
-							if string(gateway.Spec.Listeners[i].Name) == listenerName {
-								targetListener = &gateway.Spec.Listeners[i]
-								break
-							}
-						}
-					} else {
-						// Match listener by hostname
-						for i := range gateway.Spec.Listeners {
-							if gateway.Spec.Listeners[i].Hostname != nil {
-								// Check if listener hostname matches or is a wildcard that covers our hostname
-								listenerHostname := string(*gateway.Spec.Listeners[i].Hostname)
-								if listenerHostname == hostname || listenerHostname == "*" ||
-									(strings.HasPrefix(listenerHostname, "*.") && strings.HasSuffix(hostname, "."+listenerHostname[2:])) {
+						// Find the listener to determine protocol
+						// If parentRef specifies a SectionName, use that specific listener
+						// Otherwise, match listener by hostname
+						var targetListener *gatewayv1.Listener
+						if parentRef.SectionName != nil {
+							// Match by listener name
+							listenerName := string(*parentRef.SectionName)
+							for i := range gateway.Spec.Listeners {
+								if string(gateway.Spec.Listeners[i].Name) == listenerName {
 									targetListener = &gateway.Spec.Listeners[i]
 									break
 								}
 							}
+						} else {
+							// Match listener by hostname
+							for i := range gateway.Spec.Listeners {
+								if gateway.Spec.Listeners[i].Hostname != nil {
+									// Check if listener hostname matches or is a wildcard that covers our hostname
+									listenerHostname := string(*gateway.Spec.Listeners[i].Hostname)
+									if listenerHostname == hostname || listenerHostname == "*" ||
+										(strings.HasPrefix(listenerHostname, "*.") && strings.HasSuffix(hostname, "."+listenerHostname[2:])) {
+										targetListener = &gateway.Spec.Listeners[i]
+										break
+									}
+								}
+							}
+							// If no match found, use first listener as fallback
+							if targetListener == nil && len(gateway.Spec.Listeners) > 0 {
+								targetListener = &gateway.Spec.Listeners[0]
+							}
 						}
-						// If no match found, use first listener as fallback
-						if targetListener == nil && len(gateway.Spec.Listeners) > 0 {
-							targetListener = &gateway.Spec.Listeners[0]
-						}
-					}
 
 						if targetListener != nil {
 							scheme := "https"
